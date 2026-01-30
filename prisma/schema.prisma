@@ -1,0 +1,276 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// NextAuth.js Models
+// ============================================================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  
+  accounts      Account[]
+  sessions      Session[]
+  
+  // Hypotheses this user owns
+  ownedHypotheses Hypothesis[] @relation("HypothesisOwner")
+  
+  // Hypotheses this user is watching
+  watchedHypotheses HypothesisWatcher[]
+  
+  // Activities performed by this user
+  activities    ActivityLog[]
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ============================================================================
+// Domain Models
+// ============================================================================
+
+enum EvidenceDirection {
+  SUPPORTS
+  WEAKLY_SUPPORTS
+  NEUTRAL
+  WEAKLY_REFUTES
+  REFUTES
+}
+
+enum EvidenceKind {
+  EXPERIMENT
+  RESEARCH
+  DATA_ANALYSIS
+  EXTERNAL
+  OPS
+}
+
+enum RefutationType {
+  COUNTEREXAMPLE
+  ALTERNATIVE_HYPOTHESIS
+  EVIDENCE_CRITIQUE
+  SCOPE_MISMATCH
+}
+
+model Hypothesis {
+  id                   String    @id @default(cuid())
+  statement            String
+  description          String?   // longer-form description written by owner
+  confidence           Int       @default(50) // 0-100
+  confidenceIsManual   Boolean   @default(false) // true if user manually set confidence
+  impactScore          Int       @default(0)  // optional: how "foundational" this is
+  tags                 String[]  @default([])
+  order                Int       @default(0)  // for ordering root-level hypotheses
+  isArchived           Boolean   @default(false)
+  
+  // Graph view position (shared across organization)
+  graphX               Float?    // X position in graph view
+  graphY               Float?    // Y position in graph view
+  
+  // Executive Summary (AI-generated, cached)
+  execSummaryValidation  String?   // Validation plan paragraph
+  execSummaryProgress    String?   // Progress summary paragraph
+  execSummaryBigPicture  String?   // Bigger picture paragraph (null for root)
+  execSummaryGeneratedAt DateTime? // When the summary was last generated
+  
+  // Validation Suggestions (AI-generated, cached)
+  // Stored as JSON array of {statement: string, reasoning: string}
+  validationSuggestions     Json?     // Array of suggestions
+  validationSuggestionsAt   DateTime? // When suggestions were generated
+  
+  // Track when content was last meaningfully changed (for staleness detection)
+  // Updated when: statement, description, confidence, tags, evidence, or children change
+  // NOT updated when: executive summary is generated
+  contentUpdatedAt       DateTime  @default(now())
+
+  // Ownership
+  ownerId     String?   // References User who owns this hypothesis
+  owner       User?     @relation("HypothesisOwner", fields: [ownerId], references: [id])
+  ownerName   String?   // Keep for display/legacy (populated from User.name)
+  
+  // Watchers (many-to-many)
+  watchers    HypothesisWatcher[]
+  
+  // Activity history
+  activities  ActivityLog[]
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  evidence    Evidence[]
+  refutations Refutation[]
+
+  // Self-referential many-to-many via join table
+  parents     HypothesisEdge[] @relation("ChildEdges")
+  children    HypothesisEdge[] @relation("ParentEdges")
+
+  @@index([isArchived])
+  @@index([order])
+  @@index([ownerId])
+}
+
+// Join table for hypothesis watchers
+model HypothesisWatcher {
+  id           String     @id @default(cuid())
+  hypothesisId String
+  userId       String
+  
+  hypothesis   Hypothesis @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt    DateTime   @default(now())
+  
+  @@unique([hypothesisId, userId])
+  @@index([hypothesisId])
+  @@index([userId])
+}
+
+// Activity types for tracking changes
+enum ActivityType {
+  HYPOTHESIS_CREATED
+  HYPOTHESIS_UPDATED       // title, description changed
+  CONFIDENCE_CHANGED
+  EVIDENCE_ADDED
+  EVIDENCE_UPDATED
+  TAGS_CHANGED
+  OWNER_CHANGED
+  CHILD_ADDED              // new child hypothesis linked
+  HYPOTHESIS_ARCHIVED
+  HYPOTHESIS_DELETED
+}
+
+// Activity log for tracking changes to hypotheses
+model ActivityLog {
+  id           String       @id @default(cuid())
+  hypothesisId String
+  actorId      String?      // User who made the change (null for system actions)
+  actorName    String?      // Cached for display
+  
+  type         ActivityType
+  summary      String       // Human-readable description of the change
+  
+  // Optional metadata (JSON) for details like old/new values
+  metadata     Json?
+  
+  createdAt    DateTime     @default(now())
+  
+  hypothesis   Hypothesis   @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  
+  @@index([hypothesisId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+model HypothesisEdge {
+  id        String     @id @default(cuid())
+  parentId  String
+  childId   String
+  label     String?    // e.g. "depends on", "implies", "tests"
+  order     Int        @default(0)  // for ordering children within a parent
+
+  parent    Hypothesis @relation("ParentEdges", fields: [parentId], references: [id], onDelete: Cascade)
+  child     Hypothesis @relation("ChildEdges", fields: [childId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime   @default(now())
+
+  @@unique([parentId, childId])
+  @@index([parentId])
+  @@index([childId])
+}
+
+model Evidence {
+  id           String            @id @default(cuid())
+  hypothesisId String
+
+  kind         EvidenceKind
+  direction    EvidenceDirection
+  strength     Int               // 1-5
+  quality      Int               @default(3) // 1-5
+  summary      String            // 1-3 bullets in plain text is fine for MVP
+  sourceUrl    String?           // link to doc/chart/notebook etc.
+
+  ownerName    String?
+  createdAt    DateTime          @default(now())
+
+  hypothesis   Hypothesis        @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+
+  @@index([hypothesisId])
+  @@index([kind])
+}
+
+model Refutation {
+  id           String         @id @default(cuid())
+  hypothesisId String
+
+  type         RefutationType
+  summary      String         // structured challenge in plain language
+  proposedTest String?        // how to settle it
+  impact       String?        // what breaks if this is true
+
+  ownerName    String?
+  createdAt    DateTime       @default(now())
+
+  hypothesis   Hypothesis     @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+
+  @@index([hypothesisId])
+  @@index([type])
+}
+
+// Organization-wide settings (singleton pattern - only one row)
+model Settings {
+  id                String   @id @default("singleton")
+  
+  // Company/project context for AI prompts
+  companyContext    String?  @db.Text
+  
+  updatedAt         DateTime @updatedAt
+}
+

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Hypothesis" ADD COLUMN     "graphX" DOUBLE PRECISION,
+ADD COLUMN     "graphY" DOUBLE PRECISION;
