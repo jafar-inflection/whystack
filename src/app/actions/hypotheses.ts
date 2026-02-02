@@ -53,7 +53,7 @@ export async function createHypothesis(formData: {
   confidence: number;
   tags: string;
   ownerId?: string;
-}): Promise<ActionResult> {
+}): Promise<ActionResult<{ id: string }>> {
   try {
     const { statement, description, confidence, tags, ownerId } = formData;
 
@@ -213,7 +213,7 @@ export async function createChildHypothesisAndEdge(
     tags: string;
     ownerId?: string;
   }
-): Promise<ActionResult> {
+): Promise<ActionResult<{ id: string }>> {
   try {
     const { statement, description, confidence, tags, ownerId } = formData;
 
