@@ -1,4 +1,16 @@
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/whystack
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "./scripts/migrate.sh"]
+    restart: "no"
+
   app:
     build:
       context: .
@@ -15,6 +27,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   db:
